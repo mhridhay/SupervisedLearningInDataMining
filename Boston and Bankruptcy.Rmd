@@ -1,0 +1,573 @@
+---
+title: "Supervised Learning in Data Mining"
+author: "Hridhay Mehta"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+---
+
+# Regression and Classification {.tabset .tabset-fade}
+
+```{r echo=FALSE}
+knitr::opts_chunk$set(echo=FALSE, comment=FALSE, warning=FALSE, error=FALSE, message=FALSE)
+```
+
+```{r echo=FALSE,comment=FALSE, warning=FALSE, error=FALSE, message=FALSE}
+library(tidyverse)
+library(DataExplorer)
+library(MASS)
+library(glmnet)
+library(boot)
+library(rpart)
+library(rattle)
+library(randomForest)
+library(ipred)
+library(gbm)
+library(adabag)
+library(ROCR)
+library(PRROC)
+library(Hmisc)
+library(mgcv)
+library(neuralnet)
+library(nnet)
+library(e1071)
+library(gamlss.add)
+```
+
+## Boston Housing Data {.tabset .tabset-fade .tabset-pills}
+
+### Executive Summary
+
+The Boston Housing dataset consisting of 506 observations with 14 variables. The response variable is **medv**, the median housing price which is continuous in nature. Using a 70-30 sample split we fit multiple models on the training data and compare the In-sample and Out-sample Average Sum Square Errors (ASE). The table below summarizes the methods:
+
+|Sr.|Type|ASE|Out-Sample|
+|:-:|:--:|:-:|:--------:|
+|1|Linear Regression|23.597306|18.688102|
+|2|Regression Tree|16.385094|23.013215|
+|3|Bagging|12.959958|10.727727|
+|4|Random Forest|12.74322|7.157639|
+|5|Boosting|2.10690|6.924797|
+|6|GAM|8.432493|16.161948|
+|7|Neural Network|6.859694|11.741971|
+
+For the Linear Regression model we fit using AIC and BIC criterion and try LASSO variable selection. The best MSE and $R^2_{adj}$ is found in the AIC model.  
+A Regression tree is fit since the response is continuous. An optimal tree with 6 terminal nodes was built.   
+Advanced trees such as Bagging, Random Forest and Boosting are also fit and optimized.  
+Boosting shows the best performance in-sample and out-of-sample.  
+A General Additive Model is fit with **chas** and **rad** as linear terms and splines for all other terms and **age**, **black** and **zn** were not significant so were removed.  
+A Neural network with 2 hidden layers each having 3 nodes was found to show least variation on error between train and test set.  
+
+### Exploratory Data Analysis {.tabset .tabset-fade .tabset-pills}
+
+Split the data as 70% training and 30% testing.
+For all model training we will stick only to training set.
+
+```{r}
+set.seed(13474723)
+data(Boston)
+index <- sample(nrow(Boston), nrow(Boston)*0.7)
+boston.train <- Boston[index,]
+boston.test <- Boston[-index,]
+```
+
+```{r}
+plot_histogram(boston.train, title="Fig 1: Histogram for variables", theme_config = list(plot.title = element_text(hjust = 0.5)))
+str(boston.train)
+```
+
+```{r}
+table <- data.frame(matrix(ncol = 2, nrow = 7))
+names(table) <- c("Type","ASE")
+```
+
+### Linear Regression {.tabset .tabset-fade .tabset-pills}
+
+Stepwise with AIC and BIC as criterion and LASSO regression models are fit.  
+The lowest MSE and best $R^2_{adj}$ is seen with stepwise AIC regression.  
+
+$$ medv = 36.51 - 0.57*lstat + 3.72*rm - 0.87*ptratio - 1.7*dis - 17.69*nox + 0.01*black\\
++ 0.34*rad + 2.67*chas + 0.05*zn - 0.01*tax - 0.1*crim  $$
+
+```{r}
+model.linear.full <- lm(medv ~ ., data=boston.train)
+model.linear.null <- lm(medv ~ 1, data=boston.train)
+table.linear <- data.frame(matrix(ncol = 6, nrow = 3))
+names(table.linear) <- c("Criteria","AIC","BIC","R-sq","AdjR-sq","Model MSE")
+```
+
+```{r}
+model.linear.AIC <- stepAIC(model.linear.null, scope=list(lower=model.linear.null, upper=model.linear.full), trace=0)
+model.linear.AIC.summary <- summary(model.linear.AIC)
+table.linear$Criteria[1] <- "AIC"
+table.linear$AIC[1] <- round(AIC(model.linear.AIC),2)
+table.linear$BIC[1] <- round(BIC(model.linear.AIC),2)
+table.linear$`R-sq`[1] <- round(model.linear.AIC.summary$r.sq,2)
+table.linear$`AdjR-sq`[1] <- round(model.linear.AIC.summary$adj.r.squared,2)
+table.linear$`Model MSE`[1] <- round(model.linear.AIC.summary$sigma^2,2)
+```
+
+```{r}
+model.linear.BIC <- stepAIC(model.linear.null, scope=list(lower=model.linear.null, upper=model.linear.full), k=log(nrow(boston.train)), trace=0)
+model.linear.BIC.summary <- summary(model.linear.BIC)
+table.linear$Criteria[2] <- "BIC"
+table.linear$AIC[2] <- round(AIC(model.linear.BIC),2)
+table.linear$BIC[2] <- round(BIC(model.linear.BIC),2)
+table.linear$`R-sq`[2] <- round(model.linear.BIC.summary$r.sq,2)
+table.linear$`AdjR-sq`[2] <- round(model.linear.BIC.summary$adj.r.squared,2)
+table.linear$`Model MSE`[2] <- round(model.linear.BIC.summary$sigma^2,2)
+```
+
+```{r}
+cv_lasso_fit = cv.glmnet(x = as.matrix(boston.train[, -c(which(colnames(boston.train)=='medv'))]), y = boston.train$medv, alpha = 1, nfolds = 5)
+#plot(cv_lasso_fit)
+cv_lasso_lambda <- cv_lasso_fit$lambda.min
+model.linear.lasso <- glmnet(x = as.matrix(boston.train[, -c(which(colnames(boston.train)=='medv'))]), y = boston.train$medv, alpha = 1, lambda = cv_lasso_lambda)
+#coef(model.linear.lasso, s=cv_lasso_lambda)
+pred.lasso <- predict(model.linear.lasso,as.matrix(boston.train[, -c(which(colnames(boston.train)=='medv'))]))
+mse.lasso <- sum((boston.train$medv - pred.lasso)^2)/(nrow(boston.train)-13)
+sse.lasso = sum((boston.train$medv - pred.lasso)^2)
+sst.lasso = sum((boston.train$medv-mean(boston.train$medv))^2)
+adj.lasso = (nrow(boston.train)-1)/(nrow(boston.train)-13)
+adj.r.squared.lasso <- 1-adj.lasso*sse.lasso/sst.lasso
+r.squared.lasso <- 1-sse.lasso/sst.lasso
+model.linear.lasso <- lm(medv ~ .-indus, data=boston.train)
+model.linear.lasso.summary <- summary(model.linear.lasso)
+table.linear$Criteria[3] <- "Lasso"
+table.linear$AIC[3] <- round(AIC(model.linear.lasso),2)
+table.linear$BIC[3] <- round(BIC(model.linear.lasso),2)
+table.linear$`R-sq`[3] <- round(r.squared.lasso,2)
+table.linear$`AdjR-sq`[3] <- round(adj.r.squared.lasso,2)
+table.linear$`Model MSE`[3] <- round(mse.lasso,2)
+```
+
+```{r}
+#print.data.frame(table.linear)
+model.linear.AIC.summary
+```
+
+```{r}
+model.linear <- model.linear.AIC
+model.linear.pred.train <- predict(model.linear)
+model.linear$ase.train <- mean((model.linear.pred.train - boston.train$medv)^2)
+table$Type[1] <- "Linear Regression"
+table$ASE[1] <- model.linear$ase.train
+```
+
+### Regression Tree {.tabset .tabset-fade .tabset-pills}
+
+The response is numerical (continuous) so we fit a regression tree.  
+Plotting the complexity paramater (cp) we find the lowest cp value within 1 se is 0.03.  
+Using cp = 0.03 to prune the tree we get 6 terminal nodes.
+
+```{r}
+model.rpart <- rpart(formula = medv ~ ., data = boston.train)
+#fancyRpartPlot(model.rpart, digits=3, tweak=1.2, main = "Fig 2: Regression Tree (default)")
+```
+
+```{r}
+par(mar=c(5,6,9,2))
+plotcp(model.rpart)
+title(main="Fig 2: Complexity Paramter plot")
+```
+
+```{r}
+fancyRpartPlot(prune(model.rpart, cp = 0.03),  main = "Fig 3: Regression Tree (cp=0.03)")
+```
+
+```{r}
+model.rpart.pred.train <- predict(model.rpart)
+model.rpart$ase.train <- mean((model.rpart.pred.train - boston.train$medv)^2)
+table$Type[2] <- "Regression Tree"
+table$ASE[2] <- model.rpart$ase.train
+```
+
+
+### Bagging {.tabset .tabset-fade .tabset-pills}
+
+Bagging (Bootstrap and Aggregating) helps to improve prediction accuracy.  
+It fits a tree for each bootsrap sample, and then aggregates the predicted values from all trees.  
+Plotting the errors against number of trees indicates error flattens after fitting 200 trees.  
+
+```{r}
+model.bag <- randomForest(medv ~ ., data=boston.train, mtry=13)
+model.bag
+```
+
+```{r}
+plot(model.bag$mse, type='l', col=2, lwd=2, xlab = "ntree", ylab = "OOB Error", main=" Fig 4: Out of Bag error in Bagging")
+```
+
+```{r}
+model.bag.pred.train <- predict(model.bag)
+model.bag$ase.train <- mean((model.bag.pred.train - boston.train$medv)^2)
+table$Type[3] <- "Bagging"
+table$ASE[3] <- model.bag$ase.train
+```
+
+### Random Forest {.tabset .tabset-fade .tabset-pills}
+
+Random Forest is similar to bagging except that we randomly select 'm' out of 'p' predictors as candidate variables for each split in each tree.  
+In the case of regression trees the default $m = p/3$.  
+
+We fit trees using Random Forest with default 500 trees.  
+We find that **lstat** and **rm** are the most important factors.  
+Plotting the Out-of_bag error for these 500 trees shows us that the error seems to flatten after 100 trees.
+
+```{r}
+model.rf <- randomForest(medv ~ ., data=boston.train, importance=TRUE, mtry = 5)
+plot(model.rf$mse, type='l', col=2, lwd=2, xlab = "ntree", ylab = "OOB Error", main=" Fig 5: Out of Bag error in Random Forest")
+```
+
+```{r}
+model.rf.pred.train <- predict(model.rf)
+model.rf$ase.train <- mean((model.rf.pred.train - boston.train$medv)^2)
+table$Type[4] <- "Random Forest"
+table$ASE[4] <- model.rf$ase.train
+```
+
+### Boosting Tree {.tabset .tabset-fade .tabset-pills}
+
+Boosting sequentially builds a number of small trees, and each time, the response is the residual from last tree.  
+We choose to fit 5000 trees with a depth of 8 splits, shrinkage parameter = 0.01 and doing a 3-fold CV.  
+We find that **lstat** and **rm** are the most important factors.
+
+```{r}
+model.boost <- gbm(medv~., data = boston.train, distribution = "gaussian", n.trees = 5000, shrinkage = 0.01, interaction.depth = 8, cv.folds = 3)
+summary(model.boost, main="Fig 6: Variable Importance")
+```
+
+Plotting the error against trees for the CV error shows optimal trees required to be 1223  
+We fit a second boosting model with 1223 trees to avoid overfitting the data.
+
+```{r}
+gbm.perf(model.boost, method = "cv")
+title(main="Fig 7: Boosting tree error with CV")
+model.boost2 <- gbm(medv~., data = boston.train, distribution = "gaussian", n.trees = 1393, shrinkage = 0.01, interaction.depth = 8, cv.folds = 3)
+```
+
+```{r}
+model.boost.pred.train <- predict(model.boost, n.trees = 5000)
+model.boost$ase.train <- mean((model.boost.pred.train - boston.train$medv)^2)
+model.boost2.pred.train <- predict(model.boost2, n.trees = 1393)
+model.boost2$ase.train <- mean((model.boost2.pred.train - boston.train$medv)^2)
+table$Type[5] <- "Boosting"
+table$ASE[5] <- model.boost2$ase.train
+```
+
+### GAM
+
+Generalized Additive Models use a sum of non-paramteric functions over each component of X to capture non-linear relationships.  
+**rad** and **chas** are not included in the spline terms as they are quasi-categorical and categorical respectively.  
+Each term was checked for significance at 0.05 level vefore removal and if the edf was ~1 it was moved to be a linear term.  
+The removal of **age**, **black** and **zn** reduced the GCV score to 11.587 and so that model was selected.
+
+```{r}
+model.gam1 <- gam(medv ~ s(crim)+s(zn)+s(indus)+chas+s(nox)+s(rm)+s(age)+s(dis)+rad+s(tax)+s(ptratio)+s(black)+s(lstat), data=boston.train)
+model.gam2 <- gam(medv ~ s(crim)+zn+s(indus)+chas+s(nox)+s(rm)+age+s(dis)+rad+s(tax)+s(ptratio)+black+s(lstat), data=boston.train)
+model.gam3 <- gam(medv ~ s(crim)+s(indus)+chas+s(nox)+s(rm)+s(dis)+rad+s(tax)+s(ptratio)+s(lstat), data=boston.train)
+model.gam <- model.gam3
+summary(model.gam)
+plot(model.gam3, shade=TRUE, seWithMean=TRUE,scale=0,pages=1)
+model.gam.pred.train <- predict(model.gam)
+model.gam$ase.train <- mean((model.gam.pred.train - boston.train$medv)^2)
+table$Type[6] <- "GAM"
+table$ASE[6] <- model.gam$ase.train
+#sum((model.gam.pred.train - boston.train$medv)^2)/model.gam$df.residual
+#model.gam$deviance/model.gam$df.residual
+```
+
+### Neural Network
+
+The dependent variable is numeric so we set linear.output to be true.  
+Multiple models were fit:
+
+  1. 1-hidden layer - vary nodes from 1 to 9  
+  2. 2-hidden layers - Vary nodes from 1 to 9 in first layer and vary nodes from 1 to 5 in second layer
+
+The model with 3 nodes in the first layer and 3 nodes in second layer had lower out-sample error and lower variance between in-sample and out-sample errors and so it was picked.
+
+```{r}
+set.seed(13474723)
+maxs <- apply(Boston, 2, max)
+mins <- apply(Boston, 2, min)
+boston.train.scaled <- as.data.frame(scale(boston.train, center = mins, scale = maxs - mins))
+boston.test.scaled <- as.data.frame(scale(boston.test, center = mins, scale = maxs - mins))
+n <- names(Boston)
+f <- as.formula(paste("medv ~", paste(n[!n %in% "medv"], collapse = " + ")))
+
+model.nn <- neuralnet(f,data=boston.train.scaled,hidden=c(3,3),linear.output=T)
+plot(model.nn, main="Fig 9: Neural Network (3,3) for Boston Data")
+model.nn.predict.train <- compute(model.nn, boston.train.scaled)
+model.nn.predict.train_ <- model.nn.predict.train$net.result*(max(Boston$medv)-min(Boston$medv))+min(Boston$medv)
+boston.train_ <- (boston.train.scaled$medv)*(max(Boston$medv)-min(Boston$medv))+min(Boston$medv)
+model.nn.ase.train <- sum((boston.train_ - model.nn.predict.train_)^2)/nrow(boston.train.scaled)
+model.nn.predict.test <- compute(model.nn, boston.test.scaled)
+model.nn.predict.test_ <- model.nn.predict.test$net.result*(max(Boston$medv)-min(Boston$medv))+min(Boston$medv)
+boston.test_ <- (boston.test.scaled$medv)*(max(Boston$medv)-min(Boston$medv))+min(Boston$medv)
+model.nn.ase.test <- sum((boston.test_ - model.nn.predict.test_)^2)/nrow(boston.test.scaled)
+print(sprintf("In-sample ASE = %s Out-sample ASE = %s",model.nn.ase.train,model.nn.ase.test))
+table$Type[7] <- "Neural Network"
+table$ASE[7] <- model.nn.ase.train
+```
+
+```{r}
+### Backup code for running iterations
+#for (i in c(1,2,3,4,5,6,7,8,9,10)){
+#  model.nn <- neuralnet(f,data=boston.train.scaled,hidden=i,linear.output=T)
+#  plot(model.nn)
+#  model.nn.predict.train <- compute(model.nn, boston.train.scaled)
+#  model.nn.predict.train_ <- model.nn.predict.train$net.result*(max(Boston$medv)-min(Boston$medv))+min(Boston$medv)
+#
+#  boston.train_ <- (boston.train.scaled$medv)*(max(Boston$medv)-min(Boston$medv))+min(Boston$medv)
+#  model.nn.ase.train <- sum((boston.train_ - model.nn.predict.train_)^2)/nrow(boston.train.scaled)
+#  model.nn.ase.train
+#}
+#
+#for (i in c(1,2,3,4,5,6,7,8,9)){
+#  for (j in c(1,2,3,4,5)){
+#    set.seed(13474723)
+#    model.nn <- neuralnet(f,data=boston.train.scaled,hidden=c(i,j),linear.output=T)
+#    #plot(model.nn)
+#    model.nn.predict.train <- compute(model.nn, boston.train.scaled)
+#    model.nn.predict.train_ <- model.nn.predict.train$net.result*(max(Boston$medv)-min(Boston$medv))+min(Boston$medv)
+#  
+#    print(sprintf("NN(%s,%s)",i,j))
+#    boston.train_ <- (boston.train.scaled$medv)*(max(Boston$medv)-min(Boston$medv))+min(Boston$medv)
+#    model.nn.ase.train <- sum((boston.train_ - model.nn.predict.train_)^2)/nrow(boston.train.scaled)
+#    
+#    model.nn.predict.test <- compute(model.nn, boston.test.scaled)
+#    model.nn.predict.test_ <- model.nn.predict.test$net.result*(max(Boston$medv)-min(Boston$medv))+min(Boston$medv)
+#  
+#    boston.test_ <- (boston.test.scaled$medv)*(max(Boston$medv)-min(Boston$medv))+min(Boston$medv)
+#    model.nn.ase.test <- sum((boston.test_ - model.nn.predict.test_)^2)/nrow(boston.test.scaled)
+#    print(sprintf("In-sample=%s Out-sample=%s",model.nn.ase.train,model.nn.ase.test))
+#  }
+#}
+```
+
+### Out-of-Sample Validation
+
+Using the best fitted models in each type of regression, we now calculate the Test ASE.
+
+```{r}
+model.linear.pred.test <- predict(model.linear, newdata=boston.test)
+model.linear$ase.test <- mean((model.linear.pred.test - boston.test$medv)^2)
+table$`Out-Sample`[1] <- model.linear$ase.test
+
+model.rpart.pred.test <- predict(model.rpart, newdata=boston.test)
+model.rpart$ase.test <- mean((model.rpart.pred.test - boston.test$medv)^2)
+table$`Out-Sample`[2] <- model.rpart$ase.test
+
+model.bag.pred.test <- predict(model.bag, newdata=boston.test)
+model.bag$ase.test <- mean((model.bag.pred.test - boston.test$medv)^2)
+table$`Out-Sample`[3] <- model.bag$ase.test
+
+model.rf.pred.test <- predict(model.rf, newdata=boston.test)
+model.rf$ase.test <- mean((model.rf.pred.test - boston.test$medv)^2)
+table$`Out-Sample`[4] <- model.rf$ase.test
+
+model.boost.pred.test <- predict(model.boost, newdata=boston.test, n.trees = 5000)
+model.boost$ase.test <- mean((model.boost.pred.test - boston.test$medv)^2)
+model.boost2.pred.test <- predict(model.boost2, newdata=boston.test, n.trees = 1393)
+model.boost2$ase.test <- mean((model.boost2.pred.test - boston.test$medv)^2)
+table$`Out-Sample`[5] <- model.boost2$ase.test
+
+model.gam.pred.test <- predict(model.gam, newdata=boston.test)
+model.gam$ase.test <- mean((model.gam.pred.test - boston.test$medv)^2)
+table$`Out-Sample`[6] <- model.gam$ase.test
+
+table$`Out-Sample`[7] <- model.nn.ase.test
+```
+
+```{r}
+print.data.frame(table)
+```
+
+## Bankruptcy Data {.tabset .tabset-fade .tabset-pills}
+
+### Executive Summary
+
+The Bankruptcy dataset contains 5436 observations and 13 variables. R1 to R10 are continuous variables contain financial information which will be used as predictor variables, DLRSN is a binary variable where 0 labels not bankrupt, 1 labels bankrupt. Using a 70-30 sample split we fit multiple models on the training data and compare the asymmetric misclassification cost (AMC) using the cut-off probability as 1/36.  
+The table below summarizes the methods:
+
+|Sr.|Type|In-sample AMC|Out-Sample AMC|
+|:-:|:--:|:-----------:|:------------:|
+|1|Logistic Regression|0.6651|0.6689|
+|2|Classification Tree|0.5007|0.6879|
+|3|GAM|0.5719|0.6419|
+|4|Neural Network|0.4896|0.5984|
+
+For the logistic regression model AIC criterion was slightly better than BIC and so was picked with out-sample TPR of 96.04%.    
+A classification tree with 14 terminal nodes was pruned to have 8 terminal nodes with out-sample TPR of 95.15%.  
+The GAM model was built with **R1** and **R4** as linear terms and the rest having splines functions which gave out-sample TPR of 95.60%.  
+Finally a Neural Network model was fit with one hidden layer having 7 nodes and decay rate of 0.25 to avoid overfitting. The out-sample TPR was found to be 95.60%.   
+
+### Exploratory Data Analysis {.tabset .tabset-fade .tabset-pills}
+
+Split the data as 70% training and 30% testing.  
+For all model training we will stick only to training set.  
+In the training set 14.4% of the data has DLRSN=1 which are the cases idicating bankruptcy.  
+This implies that the data is imbalanced.  
+
+```{r comment=FALSE, warning=FALSE, error=FALSE, message=FALSE}
+set.seed(13474723)
+bankruptcy <- read.csv("C:/Users/mhrid/Desktop/Spring 2020/BANA 7046 - Data Mining/Cases/Case 2/bankruptcy.csv")
+bankruptcy$DLRSN <- as.factor(bankruptcy$DLRSN)
+index <- sample(nrow(bankruptcy), nrow(bankruptcy)*0.7)
+bankruptcy.train <- bankruptcy[index,]
+bankruptcy.test <- bankruptcy[-index,]
+```
+
+```{r comment=FALSE, warning=FALSE, error=FALSE, message=FALSE}
+plot_histogram(bankruptcy.train,theme_config = list(plot.title = element_text(hjust = 0.5)), title="Fig 1: Histogram for Bankruptcy Data")
+plot_correlation(bankruptcy.train,theme_config = list(plot.title = element_text(hjust = 0.5), legend.position = "none", axis.text.x = element_text(angle=90)), title="Fig 2: Correlation matrix for Bankruptcy Data")
+```
+
+```{r}
+table1 <- data.frame(matrix(ncol = 2, nrow = 7))
+names(table1) <- c("Type","ASE")
+```
+
+```{r}
+cost <- function(r, pi){
+  weight1 = 35
+  weight0 = 1
+  c1 = (r==1)&(pi==0) #FN
+  c0 = (r==0)&(pi==1) #FP
+  return(mean(weight1*c1+weight0*c0))
+}
+```
+
+### Logistic Regression
+
+A full model with variables R1 through R10 was fit as a generalized linear model and another null model was fit with only the intercept.  
+These two models were used as the upper and lower scopes for finding a best model using AIC and BIC criterions.  
+AUC for AIC model (0.882) was slightly better that BIC model (0.88) both being higher than industrial standard of 0.7.  
+Since this is imbalanced data we plot the precision-recall curve and see the AUC for AIC model (0.5723) is better than AUC for BIC model (0.5718).  
+The asymmetric misclassifaction cost is 0.6652 with:  
+Accuracy = 50.46%  
+True Positive Rate = 96.54%  
+False Positive Rate = 57.31%  
+
+
+```{r}
+glm0 <- glm(DLRSN ~ R1 + R2 + R3 + R4 + R5 + R6 + R7 + R8 + R9 + R10, family=binomial(link="logit"), data=bankruptcy.train)
+glm.null <- glm(DLRSN ~ 1, family=binomial(link="logit"), data=bankruptcy.train)
+glm.BIC <- step(glm.null, scope = list(lower = glm.null, upper = glm0), trace = FALSE, direction = "both", k = log(nrow(bankruptcy.train)))
+glm.AIC <- step(glm.null, scope = list(lower = glm.null, upper = glm0), trace = FALSE, direction = "forward", k = 2)
+```
+
+```{r}
+pcut <- 1/(35+1)
+glm.BIC.prob.train <- predict(glm.BIC, type="response")
+pred <- ROCR::prediction(glm.BIC.prob.train, bankruptcy.train$DLRSN)
+perf <- performance(pred, "tpr", "fpr")
+#plot(perf, col="green");abline(0,1,lty=2)
+#unlist(slot(performance(pred, "auc"), "y.values"))
+
+glm.AIC.prob.train <- predict(glm.AIC, type="response")
+pred <- ROCR::prediction(glm.AIC.prob.train, bankruptcy.train$DLRSN)
+perf <- performance(pred, "tpr", "fpr")
+#plot(perf, add=TRUE, col="red")
+#unlist(slot(performance(pred, "auc"), "y.values"))
+#title("Fig 3: ROC curves for AIC and BIC models")
+
+score1 <- glm.AIC.prob.train[bankruptcy.train$DLRSN==1]
+score0 <- glm.AIC.prob.train[bankruptcy.train$DLRSN==0]
+pr <- pr.curve(score1, score0, curve=T)
+plot(pr)
+
+glm.AIC.pred.train <- (glm.AIC.prob.train>=pcut)*1
+table(bankruptcy.train$DLRSN, glm.AIC.pred.train,dnn=c("Observed","Predicted"))
+sprintf("AMR = %s",round(cost(bankruptcy.train$DLRSN, glm.AIC.pred.train),4))
+```
+
+### Classification Tree
+
+All the variables from R1 to R10 were used to fit a classification tree as the response is categorical.  
+The tree is allowed to grow till cp=0.0075 and then pruned at 0.01 based on plotcp curve.  
+The asymmetric misclassifaction cost is 0.5007 with:  
+Accuracy = 56.19%  
+True Positive Rate = 98.72%  
+False Positive Rate = 51.00%  
+
+```{r}
+bankruptcy.rpart <- rpart(formula = DLRSN ~ R1 + R2 + R3 + R4 + R5 + R6 + R7 + R8 + R9 + R10, method="class", data = bankruptcy.train, cp=0.0075, parms = list(loss=matrix(c(0,35,1,0), nrow = 2)))
+bankruptcy.rpart1 <- prune(bankruptcy.rpart, cp = 0.01)
+fancyRpartPlot(prune(bankruptcy.rpart, cp = 0.01),  main = "Fig 4: Classification Tree (cp=0.01)")
+bankruptcy.rpart.pred.train <- predict(bankruptcy.rpart1, type="class")
+
+table(bankruptcy.train$DLRSN,bankruptcy.rpart.pred.train,dnn=c("Observed","Predicted"))
+sprintf("AMR = %s",round(cost(bankruptcy.train$DLRSN, bankruptcy.rpart.pred.train),4))
+#table$Type[2] <- "Classification Tree"
+#table$ASE[2] <- model.rpart$ase.train
+```
+
+### GAM
+
+All the variables R1 to R10 are first fitted with splines which show edf=1 for R1 and R4 so we move those to linear terms.  
+The models deviance explained is low.  
+The asymmetric misclassifaction cost is 0.5718 with:  
+Accuracy = 55.32%  
+True Positive Rate = 97.44%  
+False Positive Rate = 51.78% 
+
+```{r}
+bankruptcy.gam1 <- gam(DLRSN ~ s(R1)+s(R2)+s(R3)+s(R4)+s(R5)+s(R6)+s(R7)+s(R8)+s(R9)+s(R10),family=binomial,data=bankruptcy.train)
+bankruptcy.gam <- gam(DLRSN ~ R1+s(R2)+s(R3)+R4+s(R5)+s(R6)+s(R7)+s(R8)+s(R9)+s(R10),family=binomial,data=bankruptcy.train)
+summary(bankruptcy.gam)
+plot(bankruptcy.gam, shade=TRUE, seWithMean=TRUE,scale=0,pages=1)
+
+pcut <- 1/(35+1)
+bankruptcy.gam.prob.train <- predict(bankruptcy.gam, type="response")
+bankruptcy.gam.pred.train <- (bankruptcy.gam.prob.train>=pcut)*1
+table(bankruptcy.train$DLRSN,bankruptcy.gam.pred.train,dnn=c("Observed","Predicted"))
+sprintf("AMR = %s",round(cost(bankruptcy.train$DLRSN, bankruptcy.gam.pred.train),4))
+```
+
+### Neural Network
+
+The dependent variable is categorical.  
+Using the nnet function we try different sizes and see that with get good in-sample and out-sample asymetric costs with size=7.  
+The asymmetric misclassifaction cost is 0.4896 with:  
+Accuracy = 61.76%  
+True Positive Rate = 97.81%  
+False Positive Rate = 44.32% 
+
+```{r}
+set.seed(13474723)
+bankruptcy.nnet <- nnet(DLRSN ~ R1 + R2 + R3 + R4 + R5 + R6 + R7 + R8 + R9 + R10, data=bankruptcy.train, size=7, maxit=1000, decay=0.25)
+plot(bankruptcy.nnet, nid=F, main="Fig 6: Neural Network for Bankruptcy Data")
+bankruptcy.nnet.prob.train <- predict(bankruptcy.nnet, bankruptcy.train)
+bankruptcy.nnet.pred.train <- as.numeric(bankruptcy.nnet.prob.train >= pcut)*1
+table(bankruptcy.train$DLRSN, bankruptcy.nnet.pred.train, dnn=c("Observed","Predicted"))
+sprintf("AMR = %s",round(cost(bankruptcy.train$DLRSN, bankruptcy.nnet.pred.train),4))
+```
+
+### Out-of-Sample Validation
+
+```{r}
+pcut <- 1/(1+35)
+glm.AIC.prob.test <- predict(glm.AIC, newdata=bankruptcy.test, type="response")
+glm.AIC.pred.test <- (glm.AIC.prob.test>=pcut)*1
+table(bankruptcy.test$DLRSN, glm.AIC.pred.test, dnn=c("Observed","Predicted"))
+sprintf("Logistic Regression AMR = %s",round(cost(bankruptcy.test$DLRSN, glm.AIC.pred.test),4))
+
+bankruptcy.rpart.pred.test <- predict(bankruptcy.rpart1, newdata=bankruptcy.test, type="class")
+table(bankruptcy.test$DLRSN, bankruptcy.rpart.pred.test, dnn=c("Observed","Predicted"))
+sprintf("Classification Tree AMR = %s",round(cost(bankruptcy.test$DLRSN, bankruptcy.rpart.pred.test),4))
+
+bankruptcy.gam.prob.test <- predict(bankruptcy.gam, newdata=bankruptcy.test, type="response")
+bankruptcy.gam.pred.test <- (bankruptcy.gam.prob.test >= pcut)*1
+table(bankruptcy.test$DLRSN, bankruptcy.gam.pred.test, dnn=c("Observed","Predicted"))
+sprintf("GAM AMR = %s",round(cost(bankruptcy.test$DLRSN, bankruptcy.gam.pred.test),4))
+
+bankruptcy.nnet.prob.test <- predict(bankruptcy.nnet, bankruptcy.test)
+bankruptcy.nnet.pred.test <- as.numeric(bankruptcy.nnet.prob.test >= pcut)*1
+table(bankruptcy.test$DLRSN, bankruptcy.nnet.pred.test, dnn=c("Observed","Predicted"))
+sprintf("AMR = %s",round(cost(bankruptcy.test$DLRSN, bankruptcy.nnet.pred.test),4))
+```
+
+
+
