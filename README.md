@@ -1,6 +1,6 @@
 # Supervised Learning in Data Mining
 
-Boston Housing dataset is used to fit regression models while Bankruptcy dataset is used for classification models.
+Boston Housing dataset is used to fit **regression models** while Bankruptcy dataset is used for **classification models**.
 
 Regression Models:
   1. Linear Regression
@@ -67,7 +67,7 @@ Plotting the errors against number of trees indicates error flattens after fitti
 ### Random Forest
 
 Random Forest is similar to bagging except that we randomly select 'm' out of 'p' predictors as candidate variables for each split in each tree.  
-In the case of regression trees the default $m = p/3$.  
+In the case of regression trees the default m = p/3.  
 
 We fit trees using Random Forest with default 500 trees.  
 We find that **lstat** and **rm** are the most important factors.  
